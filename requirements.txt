@@ -1,0 +1,8 @@
+torch
+torchaudio
+whisperx
+speechbrain
+soundfile
+numpy
+scipy
+customtkinter
