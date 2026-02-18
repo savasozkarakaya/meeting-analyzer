@@ -1,9 +1,19 @@
 import whisperx
 import logging
+import time
 import torch
 import numpy as np
 
 logger = logging.getLogger(__name__)
+WHISPER_MODEL_VERSION = "large-v2"
+
+
+def _safe_cuda_empty_cache():
+    try:
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:
+        logger.debug("Skipping torch.cuda.empty_cache() due to runtime limitation.", exc_info=True)
 
 
 def _detect_vad_regions(
@@ -87,7 +97,12 @@ def _detect_vad_regions(
             merged.append((cur_start, cur_end))
     return merged
 
-def load_model(device: str = "auto", compute_type: str = "float16", lang: str = "tr"):
+def load_model(
+    device: str = "auto",
+    compute_type: str = "float16",
+    lang: str = "tr",
+    model_size: str = None,
+):
     """
     Loads the WhisperX model.
     """
@@ -98,11 +113,38 @@ def load_model(device: str = "auto", compute_type: str = "float16", lang: str = 
     if device == "cpu":
         compute_type = "int8"
 
-    logger.info(f"Loading WhisperX model on {device} with {compute_type}...")
+    selected_model = model_size or WHISPER_MODEL_VERSION
+    logger.info(
+        "ASR model load started model=%s device=%s compute_type=%s lang=%s",
+        selected_model,
+        device,
+        compute_type,
+        lang,
+    )
     # Using large-v2 or large-v3 is common, but let's stick to a reasonable default or let whisperx decide.
     # WhisperX load_model defaults to large-v2 usually.
-    model = whisperx.load_model("large-v2", device, compute_type=compute_type, language=lang)
+    start = time.perf_counter()
+    model = whisperx.load_model(selected_model, device, compute_type=compute_type, language=lang)
+    duration_ms = round((time.perf_counter() - start) * 1000.0, 2)
+    logger.info(
+        "ASR model load completed model=%s device=%s duration_ms=%s",
+        selected_model,
+        device,
+        duration_ms,
+    )
     return model, device
+
+
+def release_model(model):
+    """
+    Best-effort release for ASR model resources.
+    """
+    if model is None:
+        return
+    try:
+        del model
+    finally:
+        _safe_cuda_empty_cache()
 
 def transcribe(
     model,
@@ -116,9 +158,16 @@ def transcribe(
     """
     Transcribes audio using the loaded model.
     """
-    logger.info("Transcribing audio...")
+    logger.info("ASR transcription started vad_presegment=%s batch_size=%s", vad_presegment, batch_size)
+    start = time.perf_counter()
     if not vad_presegment:
-        return model.transcribe(audio_np, batch_size=batch_size)
+        result = model.transcribe(audio_np, batch_size=batch_size)
+        logger.info(
+            "ASR transcription completed duration_ms=%s segments=%s",
+            round((time.perf_counter() - start) * 1000.0, 2),
+            len(result.get("segments", [])),
+        )
+        return result
 
     regions = _detect_vad_regions(
         audio_np,
@@ -129,7 +178,13 @@ def transcribe(
     )
     if not regions:
         logger.info("VAD pre-segmentation found no speech chunks; falling back to full-audio transcription.")
-        return model.transcribe(audio_np, batch_size=batch_size)
+        result = model.transcribe(audio_np, batch_size=batch_size)
+        logger.info(
+            "ASR transcription completed duration_ms=%s segments=%s",
+            round((time.perf_counter() - start) * 1000.0, 2),
+            len(result.get("segments", [])),
+        )
+        return result
 
     logger.info(f"VAD pre-segmentation enabled: {len(regions)} chunks will be transcribed.")
     merged_segments = []
@@ -180,25 +235,50 @@ def transcribe(
 
     if not merged_segments:
         logger.info("VAD chunk transcription produced no segments; falling back to full-audio transcription.")
-        return model.transcribe(audio_np, batch_size=batch_size)
+        result = model.transcribe(audio_np, batch_size=batch_size)
+        logger.info(
+            "ASR transcription completed duration_ms=%s segments=%s",
+            round((time.perf_counter() - start) * 1000.0, 2),
+            len(result.get("segments", [])),
+        )
+        return result
 
-    return {
+    result = {
         "segments": merged_segments,
         "language": language or "tr",
     }
+    logger.info(
+        "ASR transcription completed duration_ms=%s segments=%s",
+        round((time.perf_counter() - start) * 1000.0, 2),
+        len(result.get("segments", [])),
+    )
+    return result
 
 def align(result, audio_np, device):
     """
     Aligns the transcription result.
     """
-    logger.info("Aligning transcription...")
+    logger.info("ASR alignment started language=%s device=%s", result.get("language"), device)
+    start = time.perf_counter()
     # We need to load the alignment model. 
     # Note: This might re-download if not cached.
-    model_a, metadata = whisperx.load_align_model(language_code=result["language"], device=device)
-    
-    result_aligned = whisperx.align(result["segments"], model_a, metadata, audio_np, device, return_char_alignments=False)
-    
-    # Cleanup alignment model to save memory? 
-    # In a script it's fine, but maybe we want to keep it if processing multiple files.
-    # For now, we just return the result.
-    return result_aligned
+    model_a = None
+    metadata = None
+    try:
+        model_a, metadata = whisperx.load_align_model(language_code=result["language"], device=device)
+        result_aligned = whisperx.align(
+            result["segments"], model_a, metadata, audio_np, device, return_char_alignments=False
+        )
+        logger.info(
+            "ASR alignment completed duration_ms=%s aligned_segments=%s",
+            round((time.perf_counter() - start) * 1000.0, 2),
+            len(result_aligned.get("segments", [])),
+        )
+        return result_aligned
+    finally:
+        try:
+            del model_a
+            del metadata
+        except Exception:
+            pass
+        _safe_cuda_empty_cache()

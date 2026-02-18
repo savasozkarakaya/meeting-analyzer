@@ -2,6 +2,7 @@ import torch
 import logging
 import os
 import math
+import time
 from speechbrain.inference.speaker import SpeakerRecognition
 import torch.nn.functional as F
 from huggingface_hub import snapshot_download
@@ -18,7 +19,12 @@ class Embedder:
             pass
             
         self.device = device
-        logger.info(f"Loading SpeakerRecognition model on {device}...")
+        logger.info(
+            "Embedding model load started model=%s device=%s",
+            EMBEDDING_MODEL_VERSION,
+            device,
+        )
+        start = time.perf_counter()
         # We use run_opts to specify device
         run_opts = {"device": device}
         
@@ -51,6 +57,11 @@ class Embedder:
                 savedir=os.path.join(os.environ.get("HF_HOME", "."), "speechbrain_ecapa"),
                 run_opts=run_opts
             )
+        logger.info(
+            "Embedding model load completed model=%s duration_ms=%s",
+            EMBEDDING_MODEL_VERSION,
+            round((time.perf_counter() - start) * 1000.0, 2),
+        )
 
     def get_embedding(self, wav_tensor):
         """
@@ -128,7 +139,8 @@ def extract_reference_embedding_with_info(embedder, audio_path, max_duration=40.
     """
     import torchaudio
 
-    logger.info(f"Loading reference audio: {audio_path}")
+    logger.info("Reference embedding extraction started path=%s", audio_path)
+    start = time.perf_counter()
     wav, sr = torchaudio.load(audio_path)
 
     # Resample to 16k for SpeechBrain ECAPA
@@ -186,6 +198,12 @@ def extract_reference_embedding_with_info(embedder, audio_path, max_duration=40.
         "embedding_model_version": EMBEDDING_MODEL_VERSION,
     }
     info["quality_score"] = compute_reference_quality_score(info)
+    logger.info(
+        "Reference embedding extraction completed path=%s duration_ms=%s quality_score=%.3f",
+        audio_path,
+        round((time.perf_counter() - start) * 1000.0, 2),
+        float(info.get("quality_score", 0.0)),
+    )
     return emb, info
 
 

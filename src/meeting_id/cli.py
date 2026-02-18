@@ -3,6 +3,13 @@ import logging
 import sys
 import os
 
+
+PROFILE_DEFAULTS = {
+    "fast": {"model_size": "small", "compute_type": "int8", "batch_size": 24},
+    "balanced": {"model_size": "large-v2", "compute_type": "float16", "batch_size": 16},
+    "accurate": {"model_size": "large-v3", "compute_type": "float16", "batch_size": 8},
+}
+
 def _looks_like_windows_drive_path(s: str) -> bool:
     # e.g. "C:\\foo\\bar.wav" or "D:/foo/bar.wav"
     return (
@@ -60,6 +67,13 @@ def main():
     parser.add_argument("--vad_padding_sec", type=float, default=0.15, help="Padding around detected VAD speech chunks")
     parser.add_argument("--min_speakers", type=int, default=None, help="Minimum expected speaker count for diarization")
     parser.add_argument("--max_speakers", type=int, default=None, help="Maximum expected speaker count for diarization")
+    parser.add_argument("--num_speakers", type=int, default=None, help="Fixed expected speaker count for diarization")
+    parser.add_argument("--model_size", default=None, help="ASR model size (e.g. small, medium, large-v2, large-v3)")
+    parser.add_argument("--compute_type", default=None, help="ASR compute type (e.g. float16, float32, int8)")
+    parser.add_argument("--batch_size", type=int, default=None, help="ASR transcription batch size")
+    parser.add_argument("--profile", choices=["fast", "balanced", "accurate"], default=None, help="Preset for ASR model/compute/batch")
+    parser.add_argument("--eval_manifest", default=None, help="Path to evaluation manifest JSON")
+    parser.add_argument("--eval_out", default=None, help="Optional output path for evaluation report JSON")
     
     parser.add_argument("--self_check", action="store_true", help="Run self-check/smoke test")
     
@@ -81,9 +95,53 @@ def main():
                 
         success = checks.run_self_check(args.audio, ref_path, args.out_dir)
         sys.exit(0 if success else 1)
+
+    if args.eval_manifest:
+        try:
+            from . import eval as eval_module
+
+            report_out = args.eval_out or os.path.join(args.out_dir, "eval_report.json")
+            report = eval_module.run_manifest_evaluation(
+                manifest_path=args.eval_manifest,
+                output_path=report_out,
+            )
+            logging.info(
+                "Evaluation completed: samples=%s, output=%s",
+                report.get("aggregate", {}).get("sample_count", 0),
+                report_out,
+            )
+            sys.exit(0)
+        except Exception as e:
+            logging.error(f"Evaluation failed: {e}")
+            sys.exit(1)
         
     if not args.audio or not args.reference:
         parser.error("the following arguments are required: --audio, --reference (unless --self_check is used)")
+
+    if args.min_speakers is not None and args.min_speakers <= 0:
+        parser.error("--min_speakers must be a positive integer")
+    if args.max_speakers is not None and args.max_speakers <= 0:
+        parser.error("--max_speakers must be a positive integer")
+    if args.num_speakers is not None and args.num_speakers <= 0:
+        parser.error("--num_speakers must be a positive integer")
+    if (
+        args.min_speakers is not None
+        and args.max_speakers is not None
+        and args.min_speakers > args.max_speakers
+    ):
+        parser.error("--min_speakers cannot be greater than --max_speakers")
+    if args.num_speakers is not None and (
+        args.min_speakers is not None or args.max_speakers is not None
+    ):
+        parser.error("--num_speakers cannot be used together with --min_speakers/--max_speakers")
+
+    profile_defaults = PROFILE_DEFAULTS.get(args.profile, {}) if args.profile else {}
+    model_size = args.model_size or profile_defaults.get("model_size")
+    compute_type = args.compute_type or profile_defaults.get("compute_type")
+    batch_size = args.batch_size if args.batch_size is not None else profile_defaults.get("batch_size")
+
+    if batch_size is not None and batch_size <= 0:
+        parser.error("--batch_size must be a positive integer")
     
     # Parse references
     parsed_references = []
@@ -109,6 +167,11 @@ def main():
             vad_padding_sec=args.vad_padding_sec,
             min_speakers=args.min_speakers,
             max_speakers=args.max_speakers,
+            num_speakers=args.num_speakers,
+            model_size=model_size,
+            compute_type=compute_type,
+            batch_size=batch_size,
+            profile=args.profile,
         )
     except Exception as e:
         logging.error(f"Pipeline failed: {e}")

@@ -1,11 +1,30 @@
 import whisperx
 import logging
 import os
+import time
 from bisect import bisect_right
+import torch
 
 logger = logging.getLogger(__name__)
+DIARIZATION_MODEL_VERSION = "whisperx.DiarizationPipeline(default)"
 
-def diarize(audio_np, device: str, hf_token: str = None, min_speakers=None, max_speakers=None):
+
+def _safe_cuda_empty_cache():
+    try:
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:
+        logger.debug("Skipping torch.cuda.empty_cache() in diarize.", exc_info=True)
+
+
+def diarize(
+    audio_np,
+    device: str,
+    hf_token: str = None,
+    min_speakers=None,
+    max_speakers=None,
+    num_speakers=None,
+):
     """
     Performs speaker diarization.
     """
@@ -18,20 +37,53 @@ def diarize(audio_np, device: str, hf_token: str = None, min_speakers=None, max_
         logger.warning("HF_TOKEN not found. Diarization might fail if models are not cached.")
         # We proceed, maybe it's cached.
 
-    logger.info(f"Loading Diarization pipeline on {device}...")
+    logger.info(
+        "Diarization model load started model=%s device=%s min_speakers=%s max_speakers=%s num_speakers=%s",
+        DIARIZATION_MODEL_VERSION,
+        device,
+        min_speakers,
+        max_speakers,
+        num_speakers,
+    )
+    load_start = time.perf_counter()
     # Fix for AttributeError: module 'whisperx' has no attribute 'DiarizationPipeline'
     # It seems in some versions it's under whisperx.diarize
+    diarize_model = None
     try:
-        from whisperx.diarize import DiarizationPipeline
-        diarize_model = DiarizationPipeline(use_auth_token=hf_token, device=device)
-    except ImportError:
-        # Fallback if it is top level (just in case)
-        diarize_model = whisperx.DiarizationPipeline(use_auth_token=hf_token, device=device)
+        try:
+            from whisperx.diarize import DiarizationPipeline
 
-    logger.info("Diarizing...")
-    diarize_segments = diarize_model(audio_np, min_speakers=min_speakers, max_speakers=max_speakers)
-    
-    return diarize_segments
+            diarize_model = DiarizationPipeline(use_auth_token=hf_token, device=device)
+        except ImportError:
+            # Fallback if it is top level (just in case)
+            diarize_model = whisperx.DiarizationPipeline(use_auth_token=hf_token, device=device)
+        logger.info(
+            "Diarization model load completed duration_ms=%s",
+            round((time.perf_counter() - load_start) * 1000.0, 2),
+        )
+
+        logger.info("Diarization inference started")
+        infer_start = time.perf_counter()
+        diarize_segments = diarize_model(
+            audio_np,
+            min_speakers=min_speakers,
+            max_speakers=max_speakers,
+            num_speakers=num_speakers,
+        )
+        segment_count = len(diarize_segments) if hasattr(diarize_segments, "__len__") else None
+        logger.info(
+            "Diarization inference completed duration_ms=%s segments=%s",
+            round((time.perf_counter() - infer_start) * 1000.0, 2),
+            segment_count,
+        )
+
+        return diarize_segments
+    finally:
+        try:
+            del diarize_model
+        except Exception:
+            pass
+        _safe_cuda_empty_cache()
 
 def _normalize_diarization_segments(diarize_segments):
     """

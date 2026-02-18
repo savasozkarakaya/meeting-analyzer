@@ -6,6 +6,7 @@ import logging
 import subprocess
 import sys
 import os
+import time
 
 # Set theme
 ctk.set_appearance_mode("Dark")
@@ -243,12 +244,196 @@ class MeetingAnalyzerGUI(ctk.CTk):
         thread = threading.Thread(target=self.run_pipeline_thread)
         thread.start()
 
+    def _build_review_options(self, segment):
+        options = ["UNKNOWN"]
+        for spk in self.speakers:
+            name = spk.get("name")
+            if name and name not in options:
+                options.append(name)
+        for candidate in segment.get("candidate_speakers", []):
+            name = candidate.get("name")
+            if name and name not in options:
+                options.append(name)
+        current = segment.get("speaker")
+        if current and current not in options:
+            options.append(current)
+        return options
+
+    def _show_uncertain_review_modal(self, segments):
+        uncertain_indices = [idx for idx, seg in enumerate(segments) if seg.get("decision") == "uncertain"]
+        if not uncertain_indices:
+            return segments, 0
+
+        updated_segments = [dict(seg) for seg in segments]
+        review_count = len(uncertain_indices)
+        review_result = {"applied": False}
+
+        dialog = ctk.CTkToplevel(self)
+        dialog.title("Manual Review - Uncertain Segments")
+        dialog.geometry("980x650")
+        dialog.transient(self)
+        dialog.grab_set()
+        dialog.grid_columnconfigure(0, weight=1)
+        dialog.grid_rowconfigure(1, weight=1)
+
+        header = ctk.CTkLabel(
+            dialog,
+            text=f"Found {review_count} uncertain segment(s). Select a speaker or keep UNKNOWN.",
+            font=("Roboto Medium", 14),
+        )
+        header.grid(row=0, column=0, padx=16, pady=(14, 8), sticky="w")
+
+        scroll = ctk.CTkScrollableFrame(dialog)
+        scroll.grid(row=1, column=0, padx=16, pady=8, sticky="nsew")
+        scroll.grid_columnconfigure(0, weight=1)
+
+        selections = {}
+        for row_idx, seg_idx in enumerate(uncertain_indices):
+            seg = segments[seg_idx]
+            seg_frame = ctk.CTkFrame(scroll)
+            seg_frame.grid(row=row_idx, column=0, padx=6, pady=6, sticky="ew")
+            seg_frame.grid_columnconfigure(0, weight=1)
+
+            start = float(seg.get("start", 0.0))
+            end = float(seg.get("end", 0.0))
+            ctk.CTkLabel(
+                seg_frame,
+                text=f"[{start:.2f} - {end:.2f}] current: {seg.get('speaker', 'UNKNOWN')} | score={seg.get('score', 0.0):.3f} | conf={seg.get('confidence', 0.0):.3f}",
+                anchor="w",
+                justify="left",
+            ).grid(row=0, column=0, padx=10, pady=(8, 4), sticky="ew")
+
+            text_preview = (seg.get("text", "") or "").strip()
+            if len(text_preview) > 180:
+                text_preview = text_preview[:180] + "..."
+            ctk.CTkLabel(
+                seg_frame,
+                text=text_preview if text_preview else "(no transcript text)",
+                anchor="w",
+                justify="left",
+                wraplength=900,
+            ).grid(row=1, column=0, padx=10, pady=4, sticky="ew")
+
+            candidates = seg.get("candidate_speakers", [])
+            candidate_str = ", ".join(
+                f"{c.get('name', '?')}:{float(c.get('score', 0.0)):.3f}" for c in candidates[:3]
+            ) or "N/A"
+            ctk.CTkLabel(
+                seg_frame,
+                text=f"Top candidates: {candidate_str}",
+                anchor="w",
+                justify="left",
+            ).grid(row=2, column=0, padx=10, pady=4, sticky="ew")
+
+            options = self._build_review_options(seg)
+            default_choice = seg.get("speaker", "UNKNOWN")
+            if default_choice not in options:
+                default_choice = "UNKNOWN"
+            choice_var = tk.StringVar(value=default_choice)
+            ctk.CTkOptionMenu(seg_frame, values=options, variable=choice_var).grid(
+                row=3, column=0, padx=10, pady=(4, 10), sticky="w"
+            )
+            selections[seg_idx] = choice_var
+
+        footer = ctk.CTkFrame(dialog)
+        footer.grid(row=2, column=0, padx=16, pady=(0, 14), sticky="ew")
+        footer.grid_columnconfigure((0, 1), weight=1)
+
+        def apply_review():
+            changed = 0
+            reviewed_at = int(time.time())
+            for seg_idx, choice_var in selections.items():
+                choice = (choice_var.get() or "UNKNOWN").strip() or "UNKNOWN"
+                seg_copy = dict(updated_segments[seg_idx])
+                previous_speaker = seg_copy.get("speaker", "UNKNOWN")
+                seg_copy["speaker"] = choice
+                if choice == "UNKNOWN":
+                    seg_copy["decision"] = "reject"
+                    seg_copy["decision_reason"] = "manual_review_marked_unknown"
+                else:
+                    seg_copy["decision"] = "accept"
+                    seg_copy["decision_reason"] = "manual_review_assigned_speaker"
+                seg_copy["manual_review"] = {
+                    "was_uncertain": True,
+                    "previous_speaker": previous_speaker,
+                    "resolved_speaker": choice,
+                    "resolved_at_unix": reviewed_at,
+                }
+                if previous_speaker != choice or seg_copy.get("decision") != "uncertain":
+                    changed += 1
+                updated_segments[seg_idx] = seg_copy
+
+            review_result["applied"] = True
+            review_result["changed"] = changed
+            dialog.destroy()
+
+        def skip_review():
+            review_result["applied"] = False
+            dialog.destroy()
+
+        ctk.CTkButton(
+            footer,
+            text="Keep Existing Decisions",
+            command=skip_review,
+            fg_color="transparent",
+            border_width=1,
+        ).grid(row=0, column=0, padx=(8, 4), pady=8, sticky="ew")
+        ctk.CTkButton(
+            footer,
+            text="Apply Manual Review",
+            command=apply_review,
+            fg_color="#2CC985",
+            hover_color="#229A65",
+        ).grid(row=0, column=1, padx=(4, 8), pady=8, sticky="ew")
+
+        dialog.wait_window()
+        if review_result.get("applied"):
+            return updated_segments, int(review_result.get("changed", 0))
+        return segments, 0
+
+    def _review_uncertain_segments(self, processed_segments):
+        pending = [s for s in processed_segments if s.get("decision") == "uncertain"]
+        if not pending:
+            return processed_segments, 0
+
+        done = threading.Event()
+        payload = {"segments": processed_segments, "changed": 0}
+
+        def show_modal():
+            try:
+                segments_after, changed = self._show_uncertain_review_modal(processed_segments)
+                payload["segments"] = segments_after
+                payload["changed"] = changed
+            finally:
+                done.set()
+
+        self.after(0, show_modal)
+        done.wait()
+        return payload["segments"], int(payload["changed"])
+
+    def _persist_outputs(self, segments, out_dir):
+        from . import io
+
+        io.write_segments(segments, os.path.join(out_dir, "segments.json"))
+        io.write_transcript(segments, os.path.join(out_dir, "speaker_attributed_transcript.txt"))
+        io.write_word_speaker_attribution_json(
+            segments, os.path.join(out_dir, "word_speaker_attribution.json")
+        )
+        io.write_word_speaker_attribution_txt(
+            segments, os.path.join(out_dir, "word_speaker_attribution.txt")
+        )
+
+        summary_path = os.path.join(out_dir, "summary.txt")
+        if os.path.exists(summary_path):
+            with open(summary_path, "a", encoding="utf-8") as f:
+                f.write("Manual review was applied in GUI for uncertain segments.\n")
+
     def run_pipeline_thread(self):
         try:
             min_speakers = int(self.min_speakers.get()) if self.min_speakers.get().strip() else None
             max_speakers = int(self.max_speakers.get()) if self.max_speakers.get().strip() else None
             from . import pipeline
-            pipeline.run_pipeline(
+            processed_segments = pipeline.run_pipeline(
                 audio_path=self.audio_path.get(),
                 references=self.speakers,
                 out_dir=self.out_dir.get(),
@@ -261,6 +446,11 @@ class MeetingAnalyzerGUI(ctk.CTk):
                 min_speakers=min_speakers,
                 max_speakers=max_speakers,
             )
+            reviewed_segments, changed_count = self._review_uncertain_segments(processed_segments)
+            if changed_count > 0:
+                self._persist_outputs(reviewed_segments, self.out_dir.get())
+                logging.info("Manual review applied for %s uncertain segment(s).", changed_count)
+
             self.after(0, lambda: messagebox.showinfo("Success", "Processing completed successfully!"))
             self.after(0, lambda: self.btn_open.configure(state="normal"))
         except Exception as e:
