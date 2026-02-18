@@ -24,8 +24,8 @@ def run_pipeline(
     
     # 1. Convert/Load Audio
     logger.info("Step 1: Audio Processing")
-    wav_path = audio.convert_to_wav(audio_path)
-    audio_np = audio.load_audio(wav_path)
+    with audio.ensure_wav_16k_mono(audio_path) as wav_path:
+        audio_np = audio.load_audio(wav_path)
     
     # 2. Load Models
     logger.info("Step 2: Loading Models")

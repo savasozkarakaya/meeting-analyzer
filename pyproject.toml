@@ -16,7 +16,7 @@ dependencies = [
     "numpy",
     "scipy"
 ]
-requires-python = ">=3.8"
+requires-python = ">=3.10"
 
 [project.scripts]
 meeting-id = "meeting_id.cli:main"

@@ -4,9 +4,6 @@ import subprocess
 import logging
 import importlib.util
 import json
-import soundfile as sf
-import torch
-from . import audio, pipeline
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +71,7 @@ def check_audio_properties(path):
         return False, f"File not found: {path}"
         
     try:
+        import soundfile as sf
         info = sf.info(path)
         # We don't enforce 16k mono here, as the pipeline converts it.
         # But we check if it's a valid audio file.
@@ -159,10 +157,11 @@ def run_self_check(audio_path=None, ref_path=None, out_dir="test_output"):
             return False
             
         try:
+            from . import pipeline
             # Run pipeline
             pipeline.run_pipeline(
                 audio_path=audio_path,
-                reference_path=ref_path,
+                references=[{"name": "Reference_1", "path": ref_path}],
                 out_dir=out_dir,
                 device="auto", # Use auto to test device selection
                 lang="tr",

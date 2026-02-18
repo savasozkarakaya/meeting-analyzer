@@ -4,7 +4,7 @@ Offline Turkish meeting diarization + target speaker detection.
 
 ## Prerequisites
 
-- **Python 3.8+**
+- **Python 3.10+**
 - **FFmpeg**: Must be installed and accessible in your system PATH.
 - **Hugging Face Token**: Required for Pyannote (used by WhisperX). Set `HF_TOKEN` environment variable.
 

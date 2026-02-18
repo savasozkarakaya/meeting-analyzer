@@ -2,7 +2,44 @@ import argparse
 import logging
 import sys
 import os
-from . import pipeline
+
+def _looks_like_windows_drive_path(s: str) -> bool:
+    # e.g. "C:\\foo\\bar.wav" or "D:/foo/bar.wav"
+    return (
+        len(s) >= 3
+        and s[1] == ":"
+        and s[0].isalpha()
+        and (s[2] == "\\" or s[2] == "/")
+    )
+
+def _parse_reference_arg(ref_str: str, default_name: str):
+    """
+    Parse --reference argument.
+    Supported:
+      - 'Name:Path'  (only when it does NOT look like a Windows drive path/UNC path)
+      - 'Path'       (any path, including Windows paths with ':')
+    """
+    ref_str = (ref_str or "").strip()
+    if not ref_str:
+        return default_name, ref_str
+
+    # If it looks like a Windows drive path or UNC path, never treat ':' as a Name:Path separator.
+    if _looks_like_windows_drive_path(ref_str) or ref_str.startswith("\\\\"):
+        return default_name, ref_str
+
+    # Deterministic parsing:
+    # - if it contains ':' (and it's not a drive path), treat it as Name:Path
+    # - otherwise treat as Path
+    if ":" in ref_str:
+        name_candidate, path_candidate = ref_str.split(":", 1)
+        name_candidate = name_candidate.strip()
+        path_candidate = path_candidate.strip()
+
+        # If the user accidentally passed something like ":" or "Name:", fall back to treating it as a path.
+        if path_candidate:
+            return (name_candidate or default_name), path_candidate
+
+    return default_name, ref_str
 
 def main():
     parser = argparse.ArgumentParser(description="Offline Turkish Meeting Diarization")
@@ -31,17 +68,10 @@ def main():
     
     if args.self_check:
         from . import checks
-        # For self check, we might need to adapt if it uses args.reference as string
-        # But checks.run_self_check expects single paths. 
-        # Let's handle simple case for self check: use first reference if available
         ref_path = None
         if args.reference:
-            # Take the first one, split if needed
             ref_str = args.reference[0]
-            if ":" in ref_str and not os.path.exists(ref_str):
-                ref_path = ref_str.split(":", 1)[1]
-            else:
-                ref_path = ref_str
+            _, ref_path = _parse_reference_arg(ref_str, default_name="Reference_1")
                 
         success = checks.run_self_check(args.audio, ref_path, args.out_dir)
         sys.exit(0 if success else 1)
@@ -52,16 +82,12 @@ def main():
     # Parse references
     parsed_references = []
     for i, ref_str in enumerate(args.reference):
-        if ":" in ref_str and not os.path.exists(ref_str):
-            # Assumed format Name:Path
-            name, path = ref_str.split(":", 1)
-        else:
-            name = f"Speaker_{i+1}"
-            path = ref_str
-        
+        default_name = f"Speaker_{i+1}"
+        name, path = _parse_reference_arg(ref_str, default_name=default_name)
         parsed_references.append({"name": name, "path": path})
 
     try:
+        from . import pipeline
         pipeline.run_pipeline(
             audio_path=args.audio,
             references=parsed_references,

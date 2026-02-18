@@ -4,6 +4,7 @@ import os
 import logging
 import soundfile as sf
 import numpy as np
+from contextlib import contextmanager
 
 logger = logging.getLogger(__name__)
 
@@ -37,8 +38,20 @@ def convert_to_wav(input_path: str, output_path: str = None) -> str:
         subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     except subprocess.CalledProcessError as e:
         logger.error(f"FFmpeg failed: {e.stderr.decode()}")
+        # Best-effort cleanup of temp output file if conversion failed.
+        try:
+            if output_path and os.path.exists(output_path):
+                os.remove(output_path)
+        except Exception:
+            pass
         raise RuntimeError(f"FFmpeg failed to convert {input_path}") from e
     except FileNotFoundError:
+        # Best-effort cleanup of temp output file if conversion failed.
+        try:
+            if output_path and os.path.exists(output_path):
+                os.remove(output_path)
+        except Exception:
+            pass
         raise RuntimeError("FFmpeg not found. Please install ffmpeg and add it to PATH.")
 
     return output_path
@@ -59,3 +72,22 @@ def load_audio(path: str) -> np.ndarray:
         data = data.astype(np.float32)
         
     return data
+
+@contextmanager
+def ensure_wav_16k_mono(input_path: str):
+    """
+    Context manager that yields a 16kHz mono WAV path.
+    If a temporary converted file is created, it is cleaned up automatically.
+    """
+    wav_path = None
+    try:
+        wav_path = convert_to_wav(input_path)
+        yield wav_path
+    finally:
+        # If convert_to_wav created a temp file, it should not be the same as input_path.
+        # Best-effort cleanup.
+        try:
+            if wav_path and wav_path != input_path and os.path.exists(wav_path):
+                os.remove(wav_path)
+        except Exception as e:
+            logger.warning(f"Failed to cleanup temp wav '{wav_path}': {e}")

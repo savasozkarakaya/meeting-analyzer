@@ -3,9 +3,9 @@ import tkinter as tk
 from tkinter import filedialog, messagebox
 import threading
 import logging
+import subprocess
 import sys
 import os
-from . import pipeline
 
 # Set theme
 ctk.set_appearance_mode("Dark")
@@ -234,6 +234,7 @@ class MeetingAnalyzerGUI(ctk.CTk):
 
     def run_pipeline_thread(self):
         try:
+            from . import pipeline
             pipeline.run_pipeline(
                 audio_path=self.audio_path.get(),
                 references=self.speakers,
@@ -256,13 +257,19 @@ class MeetingAnalyzerGUI(ctk.CTk):
 
     def open_output(self):
         path = self.out_dir.get()
-        if os.path.exists(path):
-            if sys.platform == 'win32':
+        if not path or not os.path.isdir(path):
+            messagebox.showerror("Error", f"Output folder not found: {path}")
+            return
+
+        try:
+            if sys.platform == "win32":
                 os.startfile(path)
-            elif sys.platform == 'darwin':
-                subprocess.Popen(['open', path])
+            elif sys.platform == "darwin":
+                subprocess.check_call(["open", path])
             else:
-                subprocess.Popen(['xdg-open', path])
+                subprocess.check_call(["xdg-open", path])
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to open output folder:\n{e}")
 
 def main():
     app = MeetingAnalyzerGUI()
