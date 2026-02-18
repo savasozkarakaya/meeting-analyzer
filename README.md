@@ -29,6 +29,17 @@ After the initial download, the tool can run completely offline.
 python -m meeting_id.cli --audio path/to/meeting.wav --reference path/to/speaker.wav
 ```
 
+Long recording / parity tuning example:
+```bash
+python -m meeting_id.cli \
+  --audio path/to/meeting.wav \
+  --reference "Alice:path/to/alice.wav" \
+  --reference "Bob:path/to/bob.wav" \
+  --vad_presegment \
+  --min_speakers 2 \
+  --max_speakers 6
+```
+
 ### GUI
 ```bash
 python -m meeting_id.gui
@@ -47,3 +58,9 @@ python -m meeting_id.cli --self_check --audio path/to/test.wav --reference path/
 ## Configuration
 - `HF_TOKEN`: Environment variable for Hugging Face token.
 - `TORCH_HOME` / `HF_HOME`: Set these environment variables to control where models are cached.
+
+## Outputs
+- `segments.json`: Segment-level text, identity decision, and word-level attribution.
+- `speaker_attributed_transcript.txt`: Readable segment transcript.
+- `word_speaker_attribution.json`: Persisted word-level speaker attribution rows.
+- `word_speaker_attribution.txt`: Readable word-level attribution timeline.

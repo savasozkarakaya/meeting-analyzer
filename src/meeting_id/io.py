@@ -44,3 +44,68 @@ def write_transcript(segments, path):
             
             line = f"[{start:.2f} - {end:.2f}] {speaker} ({decision}): {text}\n"
             f.write(line)
+
+
+def _flatten_word_attribution(segments):
+    rows = []
+    for seg_idx, seg in enumerate(segments):
+        seg_start = float(seg.get("start", 0.0))
+        seg_end = float(seg.get("end", 0.0))
+        seg_speaker = seg.get("speaker", "UNKNOWN")
+        words = seg.get("words", [])
+        if not isinstance(words, list):
+            continue
+
+        for word_idx, word in enumerate(words):
+            if not isinstance(word, dict):
+                continue
+            rows.append(
+                {
+                    "segment_index": seg_idx,
+                    "word_index": word_idx,
+                    "segment_start": seg_start,
+                    "segment_end": seg_end,
+                    "segment_speaker": seg_speaker,
+                    "word": word.get("word", "").strip(),
+                    "start": word.get("start"),
+                    "end": word.get("end"),
+                    "speaker": word.get("speaker", seg_speaker),
+                    "score": word.get("score"),
+                }
+            )
+    return rows
+
+
+def write_word_speaker_attribution_json(segments, path):
+    """
+    Persists word-level speaker attribution as JSON rows.
+    """
+    logger.info(f"Writing word-level speaker attribution to {path}...")
+
+    rows = _flatten_word_attribution(segments)
+
+    def default(obj):
+        if hasattr(obj, "item"):
+            return obj.item()
+        raise TypeError(f"Object of type {type(obj)} is not JSON serializable")
+
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(rows, f, indent=2, ensure_ascii=False, default=default)
+
+
+def write_word_speaker_attribution_txt(segments, path):
+    """
+    Persists word-level speaker attribution as a readable text file.
+    """
+    logger.info(f"Writing word-level speaker attribution text to {path}...")
+    rows = _flatten_word_attribution(segments)
+    with open(path, "w", encoding="utf-8") as f:
+        for row in rows:
+            start = row.get("start")
+            end = row.get("end")
+            word = row.get("word", "")
+            speaker = row.get("speaker", "UNKNOWN")
+            if start is None or end is None:
+                f.write(f"[N/A] {speaker}: {word}\n")
+            else:
+                f.write(f"[{float(start):.2f} - {float(end):.2f}] {speaker}: {word}\n")

@@ -85,12 +85,20 @@ def validate_pipeline_output(out_dir):
     """Validates the output files of the pipeline."""
     segments_path = os.path.join(out_dir, "segments.json")
     transcript_path = os.path.join(out_dir, "speaker_attributed_transcript.txt")
+    word_json_path = os.path.join(out_dir, "word_speaker_attribution.json")
+    word_txt_path = os.path.join(out_dir, "word_speaker_attribution.txt")
     
     if not os.path.exists(segments_path):
         return False, "segments.json not found."
         
     if not os.path.exists(transcript_path):
         return False, "speaker_attributed_transcript.txt not found."
+
+    if not os.path.exists(word_json_path):
+        return False, "word_speaker_attribution.json not found."
+
+    if not os.path.exists(word_txt_path):
+        return False, "word_speaker_attribution.txt not found."
         
     try:
         with open(segments_path, "r", encoding="utf-8") as f:
@@ -99,7 +107,20 @@ def validate_pipeline_output(out_dir):
         if not isinstance(segments, list):
             return False, "segments.json is not a list."
             
-        required_keys = {"start", "end", "speaker", "score", "decision", "flags"}
+        required_keys = {
+            "start",
+            "end",
+            "speaker",
+            "words",
+            "score",
+            "decision",
+            "flags",
+            # Faz 1 identity schema extensions
+            "candidate_speakers",
+            "confidence",
+            "evidence_flags",
+            "embedding_model_version",
+        }
         valid_decisions = {"accept", "reject", "uncertain"}
         
         for i, seg in enumerate(segments):

@@ -39,6 +39,9 @@ class MeetingAnalyzerGUI(ctk.CTk):
         self.accept_thresh = tk.DoubleVar(value=0.65)
         self.reject_thresh = tk.DoubleVar(value=0.45)
         self.min_seg = tk.DoubleVar(value=2.0)
+        self.vad_presegment = tk.BooleanVar(value=False)
+        self.min_speakers = tk.StringVar(value="")
+        self.max_speakers = tk.StringVar(value="")
         
         # Speaker Management
         self.speakers = [] 
@@ -141,14 +144,22 @@ class MeetingAnalyzerGUI(ctk.CTk):
         ctk.CTkLabel(self.frame_settings, text="Min Seg (s):").grid(row=1, column=0, padx=10, pady=5, sticky="w")
         ctk.CTkEntry(self.frame_settings, textvariable=self.min_seg, width=60).grid(row=1, column=1, padx=10, pady=5)
 
+        ctk.CTkCheckBox(self.frame_settings, text="VAD Pre-segmentation", variable=self.vad_presegment).grid(
+            row=2, column=0, padx=10, pady=5, sticky="w"
+        )
+        ctk.CTkLabel(self.frame_settings, text="Min Speakers:").grid(row=2, column=2, padx=10, pady=5, sticky="w")
+        ctk.CTkEntry(self.frame_settings, textvariable=self.min_speakers, width=60).grid(row=2, column=3, padx=10, pady=5)
+        ctk.CTkLabel(self.frame_settings, text="Max Speakers:").grid(row=3, column=2, padx=10, pady=5, sticky="w")
+        ctk.CTkEntry(self.frame_settings, textvariable=self.max_speakers, width=60).grid(row=3, column=3, padx=10, pady=5)
+
         # Progress Bar
         self.progress_bar = ctk.CTkProgressBar(self.frame_settings, mode="indeterminate")
-        self.progress_bar.grid(row=2, column=0, columnspan=4, padx=10, pady=(15, 5), sticky="ew")
+        self.progress_bar.grid(row=4, column=0, columnspan=4, padx=10, pady=(15, 5), sticky="ew")
         self.progress_bar.set(0)
 
         # Run Button
         self.btn_run = ctk.CTkButton(self.frame_settings, text="RUN ANALYSIS", command=self.start_processing, font=("Roboto Medium", 14), height=40, fg_color="#2CC985", hover_color="#229A65")
-        self.btn_run.grid(row=3, column=0, columnspan=4, padx=10, pady=10, sticky="ew")
+        self.btn_run.grid(row=5, column=0, columnspan=4, padx=10, pady=10, sticky="ew")
 
         # 5. Log Area
         self.log_area = ctk.CTkTextbox(self, state='disabled')
@@ -234,6 +245,8 @@ class MeetingAnalyzerGUI(ctk.CTk):
 
     def run_pipeline_thread(self):
         try:
+            min_speakers = int(self.min_speakers.get()) if self.min_speakers.get().strip() else None
+            max_speakers = int(self.max_speakers.get()) if self.max_speakers.get().strip() else None
             from . import pipeline
             pipeline.run_pipeline(
                 audio_path=self.audio_path.get(),
@@ -243,7 +256,10 @@ class MeetingAnalyzerGUI(ctk.CTk):
                 lang="tr",
                 accept_threshold=self.accept_thresh.get(),
                 reject_threshold=self.reject_thresh.get(),
-                min_segment_sec=self.min_seg.get()
+                min_segment_sec=self.min_seg.get(),
+                vad_presegment=self.vad_presegment.get(),
+                min_speakers=min_speakers,
+                max_speakers=max_speakers,
             )
             self.after(0, lambda: messagebox.showinfo("Success", "Processing completed successfully!"))
             self.after(0, lambda: self.btn_open.configure(state="normal"))
